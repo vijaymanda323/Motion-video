@@ -78,6 +78,9 @@ export default function PainBingoScreen() {
     fetchUserStreak();
   }, [userEmail]);
 
+  // Calculate streak text to avoid complex expressions in JSX
+  const streakDisplayText = `${streakCount} ${streakCount === 1 ? 'day' : 'days'}`;
+
   const fetchUserStreak = async () => {
     if (!userEmail) {
       setLoadingStreak(false);
@@ -203,7 +206,7 @@ export default function PainBingoScreen() {
             <ActivityIndicator color="#fff" size="small" />
           ) : (
             <Text style={styles.streakNumber}>
-              {streakCount} {streakCount === 1 ? 'day' : 'days'}
+              {streakDisplayText}
             </Text>
           )}
 

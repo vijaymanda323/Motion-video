@@ -35,6 +35,11 @@ export default function HomeScreen({ navigation }) {
     fetchUserProfile();
   }, []);
 
+  // Calculate streak text to avoid complex expressions in JSX
+  const count = safeNumber(streakCount, 0);
+  const dayText = count === 1 ? 'Day' : 'Days';
+  const streakDisplayText = `🔥 ${count} ${dayText}`;
+
   const fetchUserProfile = async () => {
     // Get email from params (passed from ProfileSetup or Login)
     const email = safeString(userEmailFromParams, '');
@@ -97,7 +102,7 @@ export default function HomeScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.headerTitle}>Hi, {safeString(userName, 'User')}</Text>
+        <Text style={styles.headerTitle}>Hi, {String(safeString(userName, 'User'))}</Text>
         <Text style={styles.headerSubtitle}>Let's fix that posture.</Text>
 
         {/* Status & Streak */}
@@ -116,7 +121,7 @@ export default function HomeScreen({ navigation }) {
               <ActivityIndicator color="#fff" size="small" />
             ) : (
               <Text style={styles.statValue}>
-                🔥 {safeNumber(streakCount, 0)} {safeNumber(streakCount, 0) === 1 ? 'Day' : 'Days'}
+                {streakDisplayText}
               </Text>
             )}
           </View>

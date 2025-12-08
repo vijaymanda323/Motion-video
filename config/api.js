@@ -8,11 +8,15 @@ import { Platform } from 'react-native';
 // - Windows: Open CMD and type 'ipconfig', look for IPv4 Address
 // - Mac/Linux: Open Terminal and type 'ifconfig' or 'ip addr', look for inet address
 
+// Set to true to use production URL even in development mode (useful for testing deployed backend)
+const USE_PRODUCTION_URL = true; // Change to false to use local development server
+
 const YOUR_COMPUTER_IP = '192.168.29.2'; // Your computer's IP address (updated to match actual IP)
+const PRODUCTION_URL = 'https://motion-physio-apk-1.onrender.com/api';
 
 let API_BASE_URL;
 
-if (__DEV__) {
+if (__DEV__ && !USE_PRODUCTION_URL) {
   // Development mode
   // For Expo with QR code (physical device), always use computer's IP
   // For emulators/simulators, use localhost with appropriate setup
@@ -44,7 +48,13 @@ if (__DEV__) {
   }
 } else {
   // Production mode
-  API_BASE_URL = 'https://your-production-url.com/api';
+  API_BASE_URL = PRODUCTION_URL;
+}
+
+// Override: Use production URL in dev mode if flag is set
+if (__DEV__ && USE_PRODUCTION_URL) {
+  API_BASE_URL = PRODUCTION_URL;
+  console.log('Using Production URL in Development Mode:', API_BASE_URL);
 }
 
 export default API_BASE_URL;

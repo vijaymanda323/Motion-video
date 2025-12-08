@@ -1,8 +1,11 @@
 const mongoose = require('mongoose');
 const User = require('../models/Schema');
+const Video = require('../models/Schema').Video;
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
 
 
 const createUser = async (req, res) => {
@@ -359,4 +362,546 @@ const getUserProfile = async (req, res) => {
     }
 }
 
-module.exports = { createUser, loginUser, updateProfile, getUserProfile };
+// ==================== VIDEO CONTROLLERS ====================
+
+// Upload video and store in MongoDB using GridFS
+const uploadVideo = async (req, res) => {
+    try {
+        // Check MongoDB connection
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ 
+                message: 'Database connection not available.',
+                error: 'MongoDB not connected'
+            });
+        }
+
+        const { 
+            title, 
+            description, 
+            fileName, 
+            videoData, // Base64 encoded video or Buffer
+            contentType,
+            fileSize, 
+            duration, 
+            userEmail, 
+            category, 
+            tags, 
+            isPublic,
+            thumbnailData, // Base64 encoded thumbnail or Buffer
+            thumbnailContentType
+        } = req.body;
+
+        // Validate required fields
+        if (!title || !fileName || !videoData || !userEmail) {
+            return res.status(400).json({ 
+                message: 'Title, fileName, videoData (base64 or buffer), and userEmail are required' 
+            });
+        }
+
+        // Normalize email
+        const normalizedEmail = userEmail.trim().toLowerCase();
+
+        // Find user to get user ID
+        const user = await User.findOne({ email: normalizedEmail });
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        // Convert base64 to Buffer if needed
+        let videoBuffer;
+        if (Buffer.isBuffer(videoData)) {
+            videoBuffer = videoData;
+        } else if (typeof videoData === 'string') {
+            // Assume base64 encoded string
+            videoBuffer = Buffer.from(videoData, 'base64');
+        } else {
+            return res.status(400).json({ 
+                message: 'videoData must be a Buffer or base64 encoded string' 
+            });
+        }
+
+        // Calculate file size if not provided
+        const calculatedFileSize = fileSize || videoBuffer.length;
+
+        // Initialize GridFS bucket
+        const db = mongoose.connection.db;
+        const videoBucket = new GridFSBucket(db, { bucketName: 'videos' });
+
+        // Upload video to GridFS
+        const videoUploadStream = videoBucket.openUploadStream(fileName, {
+            contentType: contentType || 'video/mp4',
+            metadata: {
+                title: title.trim(),
+                userEmail: normalizedEmail,
+                userId: user._id.toString()
+            }
+        });
+
+        let gridFSVideoId = null;
+        let gridFSThumbnailId = null;
+
+        // Write buffer to GridFS stream
+        await new Promise((resolve, reject) => {
+            videoUploadStream.on('finish', () => {
+                gridFSVideoId = videoUploadStream.id;
+                resolve();
+            });
+            videoUploadStream.on('error', reject);
+            // Write buffer and end stream
+            videoUploadStream.write(videoBuffer);
+            videoUploadStream.end();
+        });
+
+        // Upload thumbnail to GridFS if provided
+        if (thumbnailData) {
+            let thumbnailBuffer;
+            if (Buffer.isBuffer(thumbnailData)) {
+                thumbnailBuffer = thumbnailData;
+            } else if (typeof thumbnailData === 'string') {
+                thumbnailBuffer = Buffer.from(thumbnailData, 'base64');
+            }
+
+            if (thumbnailBuffer) {
+                const thumbnailBucket = new GridFSBucket(db, { bucketName: 'thumbnails' });
+                const thumbnailUploadStream = thumbnailBucket.openUploadStream(`${fileName}_thumb`, {
+                    contentType: thumbnailContentType || 'image/jpeg',
+                    metadata: {
+                        videoId: gridFSVideoId.toString(),
+                        userEmail: normalizedEmail
+                    }
+                });
+
+                await new Promise((resolve, reject) => {
+                    thumbnailUploadStream.on('finish', () => {
+                        gridFSThumbnailId = thumbnailUploadStream.id;
+                        resolve();
+                    });
+                    thumbnailUploadStream.on('error', reject);
+                    // Write buffer and end stream
+                    thumbnailUploadStream.write(thumbnailBuffer);
+                    thumbnailUploadStream.end();
+                });
+            }
+        }
+
+        // Create video document with GridFS IDs
+        const video = new Video({
+            title: title.trim(),
+            description: description ? description.trim() : '',
+            fileName,
+            gridFSVideoId,
+            contentType: contentType || 'video/mp4',
+            fileSize: calculatedFileSize,
+            duration: duration || 0,
+            gridFSThumbnailId,
+            thumbnailContentType: thumbnailContentType || 'image/jpeg',
+            user: user._id,
+            userEmail: normalizedEmail,
+            category: category || 'other',
+            tags: tags || [],
+            isPublic: isPublic || false,
+            status: 'ready'
+        });
+
+        await video.save();
+
+        res.status(201).json({
+            message: 'Video uploaded successfully to GridFS',
+            video: {
+                id: video._id,
+                title: video.title,
+                fileName: video.fileName,
+                contentType: video.contentType,
+                fileSize: video.fileSize,
+                duration: video.duration,
+                category: video.category,
+                uploadedAt: video.uploadedAt
+            }
+        });
+    } catch (error) {
+        console.error('Error uploading video:', error);
+        res.status(500).json({ 
+            message: 'Error uploading video', 
+            error: error.message 
+        });
+    }
+};
+
+// Get all videos for a user (metadata only, no GridFS data)
+const getUserVideos = async (req, res) => {
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ 
+                message: 'Database connection not available.',
+                error: 'MongoDB not connected'
+            });
+        }
+
+        const { email } = req.params;
+        
+        if (!email) {
+            return res.status(400).json({ message: 'Email is required' });
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+
+        // Get video metadata (GridFS IDs are included but not the actual files)
+        const videos = await Video.find({ userEmail: normalizedEmail })
+            .sort({ uploadedAt: -1 })
+            .select('-__v')
+            .lean();
+
+        res.status(200).json({
+            message: 'Videos retrieved successfully',
+            count: videos.length,
+            videos: videos
+        });
+    } catch (error) {
+        console.error('Error getting user videos:', error);
+        res.status(500).json({ 
+            message: 'Error getting videos', 
+            error: error.message 
+        });
+    }
+};
+
+// Get single video by ID (metadata only)
+const getVideoById = async (req, res) => {
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ 
+                message: 'Database connection not available.',
+                error: 'MongoDB not connected'
+            });
+        }
+
+        const { videoId } = req.params;
+        
+        if (!videoId || !mongoose.Types.ObjectId.isValid(videoId)) {
+            return res.status(400).json({ message: 'Valid video ID is required' });
+        }
+
+        const video = await Video.findById(videoId).select('-__v').lean();
+
+        if (!video) {
+            return res.status(404).json({ message: 'Video not found' });
+        }
+
+        // Increment views
+        await Video.findByIdAndUpdate(videoId, { $inc: { views: 1 } });
+
+        res.status(200).json({
+            message: 'Video retrieved successfully',
+            video: video
+        });
+    } catch (error) {
+        console.error('Error getting video:', error);
+        res.status(500).json({ 
+            message: 'Error getting video', 
+            error: error.message 
+        });
+    }
+};
+
+// Stream video file directly from GridFS (for video playback)
+const streamVideo = async (req, res) => {
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ 
+                message: 'Database connection not available.',
+                error: 'MongoDB not connected'
+            });
+        }
+
+        const { videoId } = req.params;
+        
+        if (!videoId || !mongoose.Types.ObjectId.isValid(videoId)) {
+            return res.status(400).json({ message: 'Valid video ID is required' });
+        }
+
+        const video = await Video.findById(videoId).select('gridFSVideoId contentType fileName');
+
+        if (!video || !video.gridFSVideoId) {
+            return res.status(404).json({ message: 'Video not found' });
+        }
+
+        // Initialize GridFS bucket
+        const db = mongoose.connection.db;
+        const videoBucket = new GridFSBucket(db, { bucketName: 'videos' });
+
+        // Check if file exists in GridFS
+        const files = await videoBucket.find({ _id: video.gridFSVideoId }).toArray();
+        if (files.length === 0) {
+            return res.status(404).json({ message: 'Video file not found in GridFS' });
+        }
+
+        const file = files[0];
+
+        // Set headers for video streaming
+        res.setHeader('Content-Type', video.contentType || file.contentType || 'video/mp4');
+        res.setHeader('Content-Length', file.length);
+        res.setHeader('Content-Disposition', `inline; filename="${video.fileName}"`);
+        res.setHeader('Accept-Ranges', 'bytes');
+
+        // Handle range requests for video seeking
+        const range = req.headers.range;
+        if (range) {
+            const parts = range.replace(/bytes=/, '').split('-');
+            const start = parseInt(parts[0], 10);
+            const end = parts[1] ? parseInt(parts[1], 10) : file.length - 1;
+            const chunksize = (end - start) + 1;
+
+            res.status(206);
+            res.setHeader('Content-Range', `bytes ${start}-${end}/${file.length}`);
+            res.setHeader('Content-Length', chunksize);
+
+            const downloadStream = videoBucket.openDownloadStream(video.gridFSVideoId, { start, end });
+            downloadStream.pipe(res);
+        } else {
+            // Stream entire file
+            const downloadStream = videoBucket.openDownloadStream(video.gridFSVideoId);
+            downloadStream.pipe(res);
+        }
+
+        // Increment views
+        await Video.findByIdAndUpdate(videoId, { $inc: { views: 1 } });
+    } catch (error) {
+        console.error('Error streaming video:', error);
+        res.status(500).json({ 
+            message: 'Error streaming video', 
+            error: error.message 
+        });
+    }
+};
+
+// Get video thumbnail from GridFS
+const getVideoThumbnail = async (req, res) => {
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ 
+                message: 'Database connection not available.',
+                error: 'MongoDB not connected'
+            });
+        }
+
+        const { videoId } = req.params;
+        
+        if (!videoId || !mongoose.Types.ObjectId.isValid(videoId)) {
+            return res.status(400).json({ message: 'Valid video ID is required' });
+        }
+
+        const video = await Video.findById(videoId).select('gridFSThumbnailId thumbnailContentType');
+
+        if (!video || !video.gridFSThumbnailId) {
+            return res.status(404).json({ message: 'Thumbnail not found' });
+        }
+
+        // Initialize GridFS bucket for thumbnails
+        const db = mongoose.connection.db;
+        const thumbnailBucket = new GridFSBucket(db, { bucketName: 'thumbnails' });
+
+        // Check if thumbnail exists in GridFS
+        const files = await thumbnailBucket.find({ _id: video.gridFSThumbnailId }).toArray();
+        if (files.length === 0) {
+            return res.status(404).json({ message: 'Thumbnail file not found in GridFS' });
+        }
+
+        const file = files[0];
+
+        // Set headers for image
+        res.setHeader('Content-Type', video.thumbnailContentType || file.contentType || 'image/jpeg');
+        res.setHeader('Content-Length', file.length);
+
+        // Stream thumbnail from GridFS
+        const downloadStream = thumbnailBucket.openDownloadStream(video.gridFSThumbnailId);
+        downloadStream.pipe(res);
+    } catch (error) {
+        console.error('Error getting thumbnail:', error);
+        res.status(500).json({ 
+            message: 'Error getting thumbnail', 
+            error: error.message 
+        });
+    }
+};
+
+// Update video metadata
+const updateVideo = async (req, res) => {
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ 
+                message: 'Database connection not available.',
+                error: 'MongoDB not connected'
+            });
+        }
+
+        const { videoId } = req.params;
+        const { 
+            title, 
+            description, 
+            category, 
+            tags, 
+            isPublic,
+            thumbnailData,
+            thumbnailContentType
+        } = req.body;
+
+        if (!videoId || !mongoose.Types.ObjectId.isValid(videoId)) {
+            return res.status(400).json({ message: 'Valid video ID is required' });
+        }
+
+        const video = await Video.findById(videoId);
+        if (!video) {
+            return res.status(404).json({ message: 'Video not found' });
+        }
+
+        // Update fields if provided
+        if (title !== undefined) video.title = title.trim();
+        if (description !== undefined) video.description = description.trim();
+        if (category !== undefined) video.category = category;
+        if (tags !== undefined) video.tags = tags;
+        if (isPublic !== undefined) video.isPublic = isPublic;
+        
+        // Update thumbnail in GridFS if provided
+        if (thumbnailData !== undefined) {
+            const db = mongoose.connection.db;
+            const thumbnailBucket = new GridFSBucket(db, { bucketName: 'thumbnails' });
+
+            // Delete old thumbnail if exists
+            if (video.gridFSThumbnailId) {
+                try {
+                    await thumbnailBucket.delete(video.gridFSThumbnailId);
+                } catch (error) {
+                    console.warn('Error deleting old thumbnail:', error);
+                }
+            }
+
+            // Upload new thumbnail
+            let thumbnailBuffer;
+            if (Buffer.isBuffer(thumbnailData)) {
+                thumbnailBuffer = thumbnailData;
+            } else if (typeof thumbnailData === 'string') {
+                thumbnailBuffer = Buffer.from(thumbnailData, 'base64');
+            }
+
+            if (thumbnailBuffer) {
+                const thumbnailUploadStream = thumbnailBucket.openUploadStream(`${video.fileName}_thumb`, {
+                    contentType: thumbnailContentType || 'image/jpeg',
+                    metadata: {
+                        videoId: video._id.toString(),
+                        userEmail: video.userEmail
+                    }
+                });
+
+                thumbnailBuffer.pipe(thumbnailUploadStream);
+
+                await new Promise((resolve, reject) => {
+                    thumbnailUploadStream.on('finish', () => {
+                        video.gridFSThumbnailId = thumbnailUploadStream.id;
+                        resolve();
+                    });
+                    thumbnailUploadStream.on('error', reject);
+                });
+            }
+        }
+        if (thumbnailContentType !== undefined) {
+            video.thumbnailContentType = thumbnailContentType;
+        }
+        
+        video.updatedAt = new Date();
+
+        await video.save();
+
+        res.status(200).json({
+            message: 'Video updated successfully',
+            video: {
+                id: video._id,
+                title: video.title,
+                description: video.description,
+                category: video.category,
+                tags: video.tags,
+                isPublic: video.isPublic,
+                updatedAt: video.updatedAt
+            }
+        });
+    } catch (error) {
+        console.error('Error updating video:', error);
+        res.status(500).json({ 
+            message: 'Error updating video', 
+            error: error.message 
+        });
+    }
+};
+
+// Delete video (removes from MongoDB and GridFS)
+const deleteVideo = async (req, res) => {
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ 
+                message: 'Database connection not available.',
+                error: 'MongoDB not connected'
+            });
+        }
+
+        const { videoId } = req.params;
+        
+        if (!videoId || !mongoose.Types.ObjectId.isValid(videoId)) {
+            return res.status(400).json({ message: 'Valid video ID is required' });
+        }
+
+        const video = await Video.findById(videoId);
+        if (!video) {
+            return res.status(404).json({ message: 'Video not found' });
+        }
+
+        const db = mongoose.connection.db;
+        
+        // Delete video from GridFS
+        if (video.gridFSVideoId) {
+            const videoBucket = new GridFSBucket(db, { bucketName: 'videos' });
+            try {
+                await videoBucket.delete(video.gridFSVideoId);
+                console.log('Deleted video from GridFS:', video.gridFSVideoId);
+            } catch (error) {
+                console.error('Error deleting video from GridFS:', error);
+            }
+        }
+
+        // Delete thumbnail from GridFS
+        if (video.gridFSThumbnailId) {
+            const thumbnailBucket = new GridFSBucket(db, { bucketName: 'thumbnails' });
+            try {
+                await thumbnailBucket.delete(video.gridFSThumbnailId);
+                console.log('Deleted thumbnail from GridFS:', video.gridFSThumbnailId);
+            } catch (error) {
+                console.error('Error deleting thumbnail from GridFS:', error);
+            }
+        }
+
+        // Delete video document from database
+        await Video.findByIdAndDelete(videoId);
+
+        res.status(200).json({
+            message: 'Video deleted successfully from MongoDB and GridFS'
+        });
+    } catch (error) {
+        console.error('Error deleting video:', error);
+        res.status(500).json({ 
+            message: 'Error deleting video', 
+            error: error.message 
+        });
+    }
+};
+
+module.exports = { 
+    createUser, 
+    loginUser, 
+    updateProfile, 
+    getUserProfile,
+    uploadVideo,
+    getUserVideos,
+    getVideoById,
+    streamVideo,
+    getVideoThumbnail,
+    updateVideo,
+    deleteVideo
+};
