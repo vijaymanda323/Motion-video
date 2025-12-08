@@ -122,8 +122,25 @@ export default function HomeScreen({ navigation }) {
         </View>
       </View>
 
-      {/* CONTENT */}
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      {/* CONTENT */}
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {/* Pain Area - clickable card */}
+        <TouchableOpacity onPress={() => navigation.navigate("PainArea", { userEmail: userEmail })}>
+          <View style={styles.card}>
+            <View style={styles.cardHeaderRow}>
+              <Ionicons name="location-outline" size={22} color="#777" />
+              <View style={styles.badgeBlue}>
+                <Text style={styles.badgeText}>INTERACTIVE</Text>
+              </View>
+            </View>
+
+            <Text style={styles.cardTitle}>Pain Area</Text>
+            <Text style={styles.cardText}>
+              Pinpoint and track your pain locations on an interactive body map.
+            </Text>
+          </View>
+        </TouchableOpacity>
+
         {/* Pain Bingo - clickable card */}
         <TouchableOpacity onPress={() => navigation.navigate("PainBingo", { userEmail: userEmail })}>
           <View style={styles.card}>
@@ -265,12 +282,18 @@ const styles = StyleSheet.create({
     paddingVertical: 5, 
     borderRadius: 10 
   },
-  badgeGreen: { 
-    backgroundColor: "#8ad18a", 
-    paddingHorizontal: 10, 
-    paddingVertical: 5, 
-    borderRadius: 10 
-  },
+  badgeGreen: { 
+    backgroundColor: "#8ad18a", 
+    paddingHorizontal: 10, 
+    paddingVertical: 5, 
+    borderRadius: 10 
+  },
+  badgeBlue: { 
+    backgroundColor: "#1e5cff", 
+    paddingHorizontal: 10, 
+    paddingVertical: 5, 
+    borderRadius: 10 
+  },
   badgeText: { 
     color: "#fff", 
     fontSize: 12, 

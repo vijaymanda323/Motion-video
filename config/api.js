@@ -8,7 +8,7 @@ import { Platform } from 'react-native';
 // - Windows: Open CMD and type 'ipconfig', look for IPv4 Address
 // - Mac/Linux: Open Terminal and type 'ifconfig' or 'ip addr', look for inet address
 
-const YOUR_COMPUTER_IP = '192.168.0.2'; // Your computer's IP address (updated to match actual IP)
+const YOUR_COMPUTER_IP = '192.168.29.2'; // Your computer's IP address (updated to match actual IP)
 
 let API_BASE_URL;
 

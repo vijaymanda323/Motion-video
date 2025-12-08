@@ -3,9 +3,9 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 // Existing imports
-import WelcomeScreen from './motion/WelcomeScreen';
+import WelcomeScreen from './WelcomeScreen';
 import LoginScreen from './login';
-import SignUpScreen from './motion/SignUpScreen';
+import SignUpScreen from './SignUpScreen';
 import ProfileSetup from './ProfileSetup';
 import HomeScreen from './HomeScreen'; 
 

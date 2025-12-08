@@ -236,3 +236,4 @@ Updates: name (to firstName)
 
 **All data persists** in MongoDB and is retrieved when user logs in again.
 
+

@@ -57,16 +57,31 @@ export default function LoginScreen() {
       try {
         const testUrl = API_BASE_URL.replace('/api', '');
         console.log('Testing backend connection at:', testUrl);
+        
+        // Use AbortController for timeout (fetch doesn't support timeout option)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        
         const testResponse = await fetch(testUrl, {
           method: 'GET',
-          timeout: 5000,
+          signal: controller.signal,
         });
+        
+        clearTimeout(timeoutId);
         console.log('Backend connection test:', testResponse.ok ? '✅ Success' : '❌ Failed');
       } catch (testError) {
-        console.warn('Backend connection test failed:', testError.message);
+        if (testError.name === 'AbortError') {
+          console.warn('Backend connection test failed: Request timeout (5s)');
+        } else {
+          console.warn('Backend connection test failed:', testError.message);
+        }
         // Continue anyway - the actual login will show the real error
       }
 
+      // Create AbortController for login request timeout
+      const loginController = new AbortController();
+      const loginTimeoutId = setTimeout(() => loginController.abort(), 15000); // 15 second timeout
+      
       const response = await fetch(`${API_BASE_URL}/users/login`, {
         method: 'POST',
         headers: {
@@ -77,7 +92,10 @@ export default function LoginScreen() {
           email: normalizedEmail,
           password: trimmedPassword,
         }),
+        signal: loginController.signal,
       });
+      
+      clearTimeout(loginTimeoutId);
 
       console.log('Response status:', response.status);
       console.log('Response ok:', response.ok);
@@ -133,7 +151,15 @@ export default function LoginScreen() {
       let errorMessage = 'An error occurred. Please try again.';
       let errorTitle = 'Error';
 
-      if (error.message.includes('Network request failed') ||
+      if (error.name === 'AbortError') {
+        errorTitle = 'Request Timeout';
+        errorMessage = 'The request took too long to complete.\n\n';
+        errorMessage += 'Please check:\n';
+        errorMessage += '1. Backend server is running (cd backend && npm start)\n';
+        errorMessage += `2. API URL: ${API_BASE_URL}\n`;
+        errorMessage += '3. Your device and computer are on the same network\n';
+        errorMessage += '4. Firewall allows connections on port 5000';
+      } else if (error.message.includes('Network request failed') ||
           error.message.includes('Failed to fetch') ||
           error.message.includes('NetworkError')) {
         errorTitle = 'Connection Error';
@@ -143,7 +169,7 @@ export default function LoginScreen() {
         errorMessage += `2. API URL: ${API_BASE_URL}\n`;
         errorMessage += '3. For Android Emulator: Backend must be on localhost:5000\n';
         errorMessage += '4. For iOS Simulator: Backend must be on localhost:5000\n';
-        errorMessage += '5. For Physical Device: Use your computer IP (192.168.0.10)';
+        errorMessage += '5. For Physical Device: Use your computer IP (check api.js)';
       } else if (error.message) {
         errorMessage = error.message;
       }
