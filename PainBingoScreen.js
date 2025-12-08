@@ -1,4 +1,8 @@
 import React, { useState } from "react";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
+import { useRoute } from "@react-navigation/native";
+import { useNavigation } from "@react-navigation/native";
 import {
   View,
   Text,
@@ -60,6 +64,9 @@ const LINES = [
 ];
 
 export default function PainBingoScreen() {
+  const navigation = useNavigation();
+  const route = useRoute();
+  const userEmail = route.params?.userEmail || '';
   const [selectedCells, setSelectedCells] = useState([FREE_INDEX]);
   const [showModal, setShowModal] = useState(false);
 
@@ -86,9 +93,14 @@ export default function PainBingoScreen() {
   };
 
   return (
-    <>
-      <ScrollView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         {/* HEADER */}
+        <View style={styles.header1}>
+          <TouchableOpacity onPress={() => navigation.navigate("HomeScreen", { userEmail: userEmail })}>
+            <Ionicons name="arrow-back" size={24} color="#333" />
+          </TouchableOpacity>
+        </View>
         <View style={styles.header}>
           <TouchableOpacity style={styles.dailyButton}>
             <Text style={styles.dailyButtonText}>✨ Daily Challenge</Text>
@@ -216,7 +228,7 @@ export default function PainBingoScreen() {
           </View>
         </View>
       </Modal>
-    </>
+    </SafeAreaView>
   );
 }
 
@@ -225,10 +237,22 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#F0F6FF",
   },
-
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 20,
+  },
+  header1: {
+    flexDirection: "row",
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 10,
+  },
   header: {
     alignItems: "center",
     marginTop: 20,
+    paddingHorizontal: 16,
   },
   dailyButton: {
     backgroundColor: "#2563EB",
@@ -258,15 +282,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "space-between",
+    marginBottom: 30,
   },
 
   cell: {
     width: "18%",
+    aspectRatio: 1,
     backgroundColor: "#EEF2FF",
     borderRadius: 16,
-    paddingVertical: 14,
+    padding: 8,
     alignItems: "center",
-    marginBottom: 14,
+    justifyContent: "center",
+    marginBottom: 12,
     borderWidth: 2,
     borderColor: "#CBD5E1",
   },
@@ -295,14 +322,20 @@ const styles = StyleSheet.create({
     borderRadius: 50,
   },
 
-  progressText: { marginTop: 10, fontSize: 12, color: "#555" },
+  progressText: { 
+    marginTop: 50, 
+    fontSize: 12, 
+    color: "#555",
+    marginBottom: 8,
+  },
 
   progressBarBackground: {
     width: "100%",
     height: 8,
     backgroundColor: "#E0E7FF",
-    borderRadius: 10,
-    marginTop: 6,
+    borderRadius: 14,
+    marginTop: 20,
+    marginBottom: 20,
   },
 
   progressBarFill: {
