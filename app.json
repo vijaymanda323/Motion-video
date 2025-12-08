@@ -16,6 +16,7 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.motionphysio.app",
       "adaptiveIcon": {
         "backgroundColor": "#000000"
       },
