@@ -1,5 +1,4 @@
 const mongoose = require('mongoose');
-const { GridFSBucket } = require('mongodb');
 const User = require('../models/Schema');
 const Video = require('../models/Schema').Video;
 const bcrypt = require('bcryptjs');
@@ -8,6 +7,8 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const cloudinary = require('../config/cloudinary');
+const { Readable } = require('stream');
 
 
 const createUser = async (req, res) => {
@@ -366,7 +367,7 @@ const getUserProfile = async (req, res) => {
 
 // ==================== VIDEO CONTROLLERS ====================
 
-// Configure multer for file uploads (memory storage for GridFS)
+// Configure multer for file uploads (memory storage for Cloudinary)
 const storage = multer.memoryStorage();
 const upload = multer({
     storage: storage,
@@ -394,6 +395,36 @@ const upload = multer({
         }
     }
 });
+
+// Helper function to upload buffer to Cloudinary
+const uploadToCloudinary = (buffer, folder, resourceType = 'auto', publicId = null) => {
+    return new Promise((resolve, reject) => {
+        const uploadOptions = {
+            folder: folder,
+            resource_type: resourceType,
+            public_id: publicId,
+            chunk_size: 6000000, // 6MB chunks for large files
+        };
+
+        // Use upload_stream for better memory efficiency with large files
+        const uploadStream = cloudinary.uploader.upload_stream(
+            uploadOptions,
+            (error, result) => {
+                if (error) {
+                    reject(error);
+                } else {
+                    resolve(result);
+                }
+            }
+        );
+
+        // Convert buffer to stream and pipe to Cloudinary
+        const readableStream = new Readable();
+        readableStream.push(buffer);
+        readableStream.push(null); // End the stream
+        readableStream.pipe(uploadStream);
+    });
+};
 
 // Upload video using multipart/form-data (for Postman file uploads)
 const uploadVideoFile = async (req, res) => {
@@ -444,58 +475,43 @@ const uploadVideoFile = async (req, res) => {
         const contentType = req.file.mimetype || 'video/mp4';
         const fileSize = req.file.size;
 
-        // Initialize GridFS bucket
-        const db = mongoose.connection.db;
-        const videoBucket = new GridFSBucket(db, { bucketName: 'videos' });
-
-        // Upload video to GridFS
-        const videoUploadStream = videoBucket.openUploadStream(fileName, {
-            contentType: contentType,
-            metadata: {
-                title: title.trim(),
-                userEmail: normalizedEmail,
-                userId: user._id.toString()
-            }
-        });
-
-        let gridFSVideoId = null;
-
-        // Write buffer to GridFS stream
-        await new Promise((resolve, reject) => {
-            videoUploadStream.on('finish', () => {
-                gridFSVideoId = videoUploadStream.id;
-                resolve();
-            });
-            videoUploadStream.on('error', reject);
-            videoUploadStream.write(videoBuffer);
-            videoUploadStream.end();
-        });
+        // Upload video to Cloudinary
+        const videoPublicId = `motion-videos/${user._id}/${Date.now()}_${fileName.replace(/\.[^/.]+$/, '')}`;
+        const videoUploadResult = await uploadToCloudinary(
+            videoBuffer,
+            'motion-videos',
+            'video',
+            videoPublicId
+        );
 
         // Handle thumbnail if provided as a separate file
-        let gridFSThumbnailId = null;
+        let cloudinaryThumbnailUrl = null;
+        let cloudinaryThumbnailId = null;
         let thumbnailContentType = 'image/jpeg';
         
         if (req.files && req.files.thumbnail && req.files.thumbnail.length > 0) {
             const thumbnailBuffer = req.files.thumbnail[0].buffer;
             thumbnailContentType = req.files.thumbnail[0].mimetype || 'image/jpeg';
             
-            const thumbnailBucket = new GridFSBucket(db, { bucketName: 'thumbnails' });
-            const thumbnailUploadStream = thumbnailBucket.openUploadStream(`${fileName}_thumb`, {
-                contentType: thumbnailContentType,
-                metadata: {
-                    videoId: gridFSVideoId.toString(),
-                    userEmail: normalizedEmail
-                }
-            });
-
-            await new Promise((resolve, reject) => {
-                thumbnailUploadStream.on('finish', () => {
-                    gridFSThumbnailId = thumbnailUploadStream.id;
-                    resolve();
-                });
-                thumbnailUploadStream.on('error', reject);
-                thumbnailUploadStream.write(thumbnailBuffer);
-                thumbnailUploadStream.end();
+            const thumbnailPublicId = `motion-thumbnails/${user._id}/${Date.now()}_${fileName.replace(/\.[^/.]+$/, '')}_thumb`;
+            const thumbnailUploadResult = await uploadToCloudinary(
+                thumbnailBuffer,
+                'motion-thumbnails',
+                'image',
+                thumbnailPublicId
+            );
+            
+            cloudinaryThumbnailUrl = thumbnailUploadResult.secure_url;
+            cloudinaryThumbnailId = thumbnailUploadResult.public_id;
+        } else {
+            // Generate thumbnail from video if not provided
+            // Cloudinary automatically generates thumbnails, we can use the video URL with transformation
+            cloudinaryThumbnailUrl = cloudinary.url(videoPublicId, {
+                resource_type: 'video',
+                transformation: [
+                    { width: 400, height: 300, crop: 'fill' },
+                    { quality: 'auto', fetch_format: 'auto' }
+                ]
             });
         }
 
@@ -509,16 +525,18 @@ const uploadVideoFile = async (req, res) => {
             }
         }
 
-        // Create video document with GridFS IDs
+        // Create video document with Cloudinary URLs
         const video = new Video({
             title: title.trim(),
             description: description ? description.trim() : '',
             fileName,
-            gridFSVideoId,
+            cloudinaryVideoUrl: videoUploadResult.secure_url,
+            cloudinaryVideoId: videoUploadResult.public_id,
             contentType: contentType,
             fileSize: fileSize,
             duration: duration ? parseFloat(duration) : 0,
-            gridFSThumbnailId,
+            cloudinaryThumbnailUrl: cloudinaryThumbnailUrl,
+            cloudinaryThumbnailId: cloudinaryThumbnailId,
             thumbnailContentType: thumbnailContentType,
             user: user._id,
             userEmail: normalizedEmail,
@@ -612,36 +630,19 @@ const uploadVideo = async (req, res) => {
         // Calculate file size if not provided
         const calculatedFileSize = fileSize || videoBuffer.length;
 
-        // Initialize GridFS bucket
-        const db = mongoose.connection.db;
-        const videoBucket = new GridFSBucket(db, { bucketName: 'videos' });
+        // Upload video to Cloudinary
+        const videoPublicId = `motion-videos/${user._id}/${Date.now()}_${fileName.replace(/\.[^/.]+$/, '')}`;
+        const videoUploadResult = await uploadToCloudinary(
+            videoBuffer,
+            'motion-videos',
+            'video',
+            videoPublicId
+        );
 
-        // Upload video to GridFS
-        const videoUploadStream = videoBucket.openUploadStream(fileName, {
-            contentType: contentType || 'video/mp4',
-            metadata: {
-                title: title.trim(),
-                userEmail: normalizedEmail,
-                userId: user._id.toString()
-            }
-        });
-
-        let gridFSVideoId = null;
-        let gridFSThumbnailId = null;
-
-        // Write buffer to GridFS stream
-        await new Promise((resolve, reject) => {
-            videoUploadStream.on('finish', () => {
-                gridFSVideoId = videoUploadStream.id;
-                resolve();
-            });
-            videoUploadStream.on('error', reject);
-            // Write buffer and end stream
-            videoUploadStream.write(videoBuffer);
-            videoUploadStream.end();
-        });
-
-        // Upload thumbnail to GridFS if provided
+        // Upload thumbnail to Cloudinary if provided
+        let cloudinaryThumbnailUrl = null;
+        let cloudinaryThumbnailId = null;
+        
         if (thumbnailData) {
             let thumbnailBuffer;
             if (Buffer.isBuffer(thumbnailData)) {
@@ -651,38 +652,40 @@ const uploadVideo = async (req, res) => {
             }
 
             if (thumbnailBuffer) {
-                const thumbnailBucket = new GridFSBucket(db, { bucketName: 'thumbnails' });
-                const thumbnailUploadStream = thumbnailBucket.openUploadStream(`${fileName}_thumb`, {
-                    contentType: thumbnailContentType || 'image/jpeg',
-                    metadata: {
-                        videoId: gridFSVideoId.toString(),
-                        userEmail: normalizedEmail
-                    }
-                });
-
-                await new Promise((resolve, reject) => {
-                    thumbnailUploadStream.on('finish', () => {
-                        gridFSThumbnailId = thumbnailUploadStream.id;
-                        resolve();
-                    });
-                    thumbnailUploadStream.on('error', reject);
-                    // Write buffer and end stream
-                    thumbnailUploadStream.write(thumbnailBuffer);
-                    thumbnailUploadStream.end();
-                });
+                const thumbnailPublicId = `motion-thumbnails/${user._id}/${Date.now()}_${fileName.replace(/\.[^/.]+$/, '')}_thumb`;
+                const thumbnailUploadResult = await uploadToCloudinary(
+                    thumbnailBuffer,
+                    'motion-thumbnails',
+                    'image',
+                    thumbnailPublicId
+                );
+                
+                cloudinaryThumbnailUrl = thumbnailUploadResult.secure_url;
+                cloudinaryThumbnailId = thumbnailUploadResult.public_id;
             }
+        } else {
+            // Generate thumbnail from video if not provided
+            cloudinaryThumbnailUrl = cloudinary.url(videoPublicId, {
+                resource_type: 'video',
+                transformation: [
+                    { width: 400, height: 300, crop: 'fill' },
+                    { quality: 'auto', fetch_format: 'auto' }
+                ]
+            });
         }
 
-        // Create video document with GridFS IDs
+        // Create video document with Cloudinary URLs
         const video = new Video({
             title: title.trim(),
             description: description ? description.trim() : '',
             fileName,
-            gridFSVideoId,
+            cloudinaryVideoUrl: videoUploadResult.secure_url,
+            cloudinaryVideoId: videoUploadResult.public_id,
             contentType: contentType || 'video/mp4',
             fileSize: calculatedFileSize,
             duration: duration || 0,
-            gridFSThumbnailId,
+            cloudinaryThumbnailUrl: cloudinaryThumbnailUrl,
+            cloudinaryThumbnailId: cloudinaryThumbnailId,
             thumbnailContentType: thumbnailContentType || 'image/jpeg',
             user: user._id,
             userEmail: normalizedEmail,
@@ -732,10 +735,23 @@ const getAllVideos = async (req, res) => {
             .select('-__v')
             .lean();
 
+        // Add Cloudinary URLs to response
+        const videosWithUrls = videos.map(video => ({
+            ...video,
+            videoUrl: video.cloudinaryVideoUrl || null,
+            thumbnailUrl: video.cloudinaryThumbnailUrl || (video.cloudinaryVideoId ? cloudinary.url(video.cloudinaryVideoId, {
+                resource_type: 'video',
+                transformation: [
+                    { width: 400, height: 300, crop: 'fill' },
+                    { quality: 'auto', fetch_format: 'auto' }
+                ]
+            }) : null)
+        }));
+
         res.status(200).json({
             message: 'Videos retrieved successfully',
-            count: videos.length,
-            videos: videos
+            count: videosWithUrls.length,
+            videos: videosWithUrls
         });
     } catch (error) {
         console.error('Error getting all videos:', error);
@@ -784,11 +800,24 @@ const getVideosByRoutine = async (req, res) => {
             .select('-__v')
             .lean();
 
+        // Add Cloudinary URLs to response
+        const videosWithUrls = videos.map(video => ({
+            ...video,
+            videoUrl: video.cloudinaryVideoUrl || null,
+            thumbnailUrl: video.cloudinaryThumbnailUrl || (video.cloudinaryVideoId ? cloudinary.url(video.cloudinaryVideoId, {
+                resource_type: 'video',
+                transformation: [
+                    { width: 400, height: 300, crop: 'fill' },
+                    { quality: 'auto', fetch_format: 'auto' }
+                ]
+            }) : null)
+        }));
+
         res.status(200).json({
             message: 'Videos retrieved successfully',
             routineName: routineName,
-            count: videos.length,
-            videos: videos
+            count: videosWithUrls.length,
+            videos: videosWithUrls
         });
     } catch (error) {
         console.error('Error getting videos by routine:', error);
@@ -817,16 +846,29 @@ const getUserVideos = async (req, res) => {
 
         const normalizedEmail = email.trim().toLowerCase();
 
-        // Get video metadata (GridFS IDs are included but not the actual files)
+        // Get video metadata with Cloudinary URLs
         const videos = await Video.find({ userEmail: normalizedEmail })
             .sort({ uploadedAt: -1 })
             .select('-__v')
             .lean();
 
+        // Add Cloudinary URLs to response
+        const videosWithUrls = videos.map(video => ({
+            ...video,
+            videoUrl: video.cloudinaryVideoUrl || null,
+            thumbnailUrl: video.cloudinaryThumbnailUrl || (video.cloudinaryVideoId ? cloudinary.url(video.cloudinaryVideoId, {
+                resource_type: 'video',
+                transformation: [
+                    { width: 400, height: 300, crop: 'fill' },
+                    { quality: 'auto', fetch_format: 'auto' }
+                ]
+            }) : null)
+        }));
+
         res.status(200).json({
             message: 'Videos retrieved successfully',
-            count: videos.length,
-            videos: videos
+            count: videosWithUrls.length,
+            videos: videosWithUrls
         });
     } catch (error) {
         console.error('Error getting user videos:', error);
@@ -859,12 +901,25 @@ const getVideoById = async (req, res) => {
             return res.status(404).json({ message: 'Video not found' });
         }
 
+        // Add Cloudinary URLs to response
+        const videoWithUrls = {
+            ...video,
+            videoUrl: video.cloudinaryVideoUrl || null,
+            thumbnailUrl: video.cloudinaryThumbnailUrl || (video.cloudinaryVideoId ? cloudinary.url(video.cloudinaryVideoId, {
+                resource_type: 'video',
+                transformation: [
+                    { width: 400, height: 300, crop: 'fill' },
+                    { quality: 'auto', fetch_format: 'auto' }
+                ]
+            }) : null)
+        };
+
         // Increment views
         await Video.findByIdAndUpdate(videoId, { $inc: { views: 1 } });
 
         res.status(200).json({
             message: 'Video retrieved successfully',
-            video: video
+            video: videoWithUrls
         });
     } catch (error) {
         console.error('Error getting video:', error);
@@ -875,7 +930,7 @@ const getVideoById = async (req, res) => {
     }
 };
 
-// Stream video file directly from GridFS (for video playback)
+// Get video URL from Cloudinary (for video playback)
 const streamVideo = async (req, res) => {
     try {
         if (mongoose.connection.readyState !== 1) {
@@ -891,62 +946,43 @@ const streamVideo = async (req, res) => {
             return res.status(400).json({ message: 'Valid video ID is required' });
         }
 
-        const video = await Video.findById(videoId).select('gridFSVideoId contentType fileName');
+        const video = await Video.findById(videoId).select('cloudinaryVideoUrl cloudinaryVideoId gridFSVideoId contentType fileName');
 
-        if (!video || !video.gridFSVideoId) {
+        if (!video) {
             return res.status(404).json({ message: 'Video not found' });
         }
 
-        // Initialize GridFS bucket
-        const db = mongoose.connection.db;
-        const videoBucket = new GridFSBucket(db, { bucketName: 'videos' });
-
-        // Check if file exists in GridFS
-        const files = await videoBucket.find({ _id: video.gridFSVideoId }).toArray();
-        if (files.length === 0) {
-            return res.status(404).json({ message: 'Video file not found in GridFS' });
-        }
-
-        const file = files[0];
-
-        // Set headers for video streaming
-        res.setHeader('Content-Type', video.contentType || file.contentType || 'video/mp4');
-        res.setHeader('Content-Length', file.length);
-        res.setHeader('Content-Disposition', `inline; filename="${video.fileName}"`);
-        res.setHeader('Accept-Ranges', 'bytes');
-
-        // Handle range requests for video seeking
-        const range = req.headers.range;
-        if (range) {
-            const parts = range.replace(/bytes=/, '').split('-');
-            const start = parseInt(parts[0], 10);
-            const end = parts[1] ? parseInt(parts[1], 10) : file.length - 1;
-            const chunksize = (end - start) + 1;
-
-            res.status(206);
-            res.setHeader('Content-Range', `bytes ${start}-${end}/${file.length}`);
-            res.setHeader('Content-Length', chunksize);
-
-            const downloadStream = videoBucket.openDownloadStream(video.gridFSVideoId, { start, end });
-            downloadStream.pipe(res);
+        // Use Cloudinary URL if available, otherwise fallback to GridFS (for backward compatibility)
+        let videoUrl;
+        if (video.cloudinaryVideoUrl) {
+            videoUrl = video.cloudinaryVideoUrl;
+        } else if (video.gridFSVideoId) {
+            // Legacy GridFS support - redirect to GridFS stream endpoint
+            return res.redirect(`/api/videos/${videoId}/stream-gridfs`);
         } else {
-            // Stream entire file
-            const downloadStream = videoBucket.openDownloadStream(video.gridFSVideoId);
-            downloadStream.pipe(res);
+            return res.status(404).json({ message: 'Video file not found' });
         }
 
         // Increment views
         await Video.findByIdAndUpdate(videoId, { $inc: { views: 1 } });
+
+        // Return Cloudinary URL - Cloudinary handles streaming automatically
+        res.status(200).json({
+            message: 'Video URL retrieved successfully',
+            videoUrl: videoUrl,
+            videoId: video._id,
+            fileName: video.fileName
+        });
     } catch (error) {
-        console.error('Error streaming video:', error);
+        console.error('Error getting video URL:', error);
         res.status(500).json({ 
-            message: 'Error streaming video', 
+            message: 'Error getting video URL', 
             error: error.message 
         });
     }
 };
 
-// Get video thumbnail from GridFS
+// Get video thumbnail URL from Cloudinary
 const getVideoThumbnail = async (req, res) => {
     try {
         if (mongoose.connection.readyState !== 1) {
@@ -962,31 +998,38 @@ const getVideoThumbnail = async (req, res) => {
             return res.status(400).json({ message: 'Valid video ID is required' });
         }
 
-        const video = await Video.findById(videoId).select('gridFSThumbnailId thumbnailContentType');
+        const video = await Video.findById(videoId).select('cloudinaryThumbnailUrl cloudinaryThumbnailId cloudinaryVideoId gridFSThumbnailId thumbnailContentType');
 
-        if (!video || !video.gridFSThumbnailId) {
+        if (!video) {
+            return res.status(404).json({ message: 'Video not found' });
+        }
+
+        // Use Cloudinary thumbnail URL if available
+        let thumbnailUrl;
+        if (video.cloudinaryThumbnailUrl) {
+            thumbnailUrl = video.cloudinaryThumbnailUrl;
+        } else if (video.cloudinaryVideoId) {
+            // Generate thumbnail from video if thumbnail not uploaded
+            thumbnailUrl = cloudinary.url(video.cloudinaryVideoId, {
+                resource_type: 'video',
+                transformation: [
+                    { width: 400, height: 300, crop: 'fill' },
+                    { quality: 'auto', fetch_format: 'auto' }
+                ]
+            });
+        } else if (video.gridFSThumbnailId) {
+            // Legacy GridFS support - redirect to GridFS thumbnail endpoint
+            return res.redirect(`/api/videos/${videoId}/thumbnail-gridfs`);
+        } else {
             return res.status(404).json({ message: 'Thumbnail not found' });
         }
 
-        // Initialize GridFS bucket for thumbnails
-        const db = mongoose.connection.db;
-        const thumbnailBucket = new GridFSBucket(db, { bucketName: 'thumbnails' });
-
-        // Check if thumbnail exists in GridFS
-        const files = await thumbnailBucket.find({ _id: video.gridFSThumbnailId }).toArray();
-        if (files.length === 0) {
-            return res.status(404).json({ message: 'Thumbnail file not found in GridFS' });
-        }
-
-        const file = files[0];
-
-        // Set headers for image
-        res.setHeader('Content-Type', video.thumbnailContentType || file.contentType || 'image/jpeg');
-        res.setHeader('Content-Length', file.length);
-
-        // Stream thumbnail from GridFS
-        const downloadStream = thumbnailBucket.openDownloadStream(video.gridFSThumbnailId);
-        downloadStream.pipe(res);
+        // Return thumbnail URL - Cloudinary serves images directly
+        res.status(200).json({
+            message: 'Thumbnail URL retrieved successfully',
+            thumbnailUrl: thumbnailUrl,
+            videoId: video._id
+        });
     } catch (error) {
         console.error('Error getting thumbnail:', error);
         res.status(500).json({ 
@@ -1033,17 +1076,16 @@ const updateVideo = async (req, res) => {
         if (tags !== undefined) video.tags = tags;
         if (isPublic !== undefined) video.isPublic = isPublic;
         
-        // Update thumbnail in GridFS if provided
+        // Update thumbnail in Cloudinary if provided
         if (thumbnailData !== undefined) {
-            const db = mongoose.connection.db;
-            const thumbnailBucket = new GridFSBucket(db, { bucketName: 'thumbnails' });
-
-            // Delete old thumbnail if exists
-            if (video.gridFSThumbnailId) {
+            // Delete old thumbnail from Cloudinary if exists
+            if (video.cloudinaryThumbnailId) {
                 try {
-                    await thumbnailBucket.delete(video.gridFSThumbnailId);
+                    await cloudinary.uploader.destroy(video.cloudinaryThumbnailId, {
+                        resource_type: 'image'
+                    });
                 } catch (error) {
-                    console.warn('Error deleting old thumbnail:', error);
+                    console.warn('Error deleting old thumbnail from Cloudinary:', error);
                 }
             }
 
@@ -1056,23 +1098,16 @@ const updateVideo = async (req, res) => {
             }
 
             if (thumbnailBuffer) {
-                const thumbnailUploadStream = thumbnailBucket.openUploadStream(`${video.fileName}_thumb`, {
-                    contentType: thumbnailContentType || 'image/jpeg',
-                    metadata: {
-                        videoId: video._id.toString(),
-                        userEmail: video.userEmail
-                    }
-                });
-
-                thumbnailBuffer.pipe(thumbnailUploadStream);
-
-                await new Promise((resolve, reject) => {
-                    thumbnailUploadStream.on('finish', () => {
-                        video.gridFSThumbnailId = thumbnailUploadStream.id;
-                        resolve();
-                    });
-                    thumbnailUploadStream.on('error', reject);
-                });
+                const thumbnailPublicId = `motion-thumbnails/${video.user}/${Date.now()}_${video.fileName.replace(/\.[^/.]+$/, '')}_thumb`;
+                const thumbnailUploadResult = await uploadToCloudinary(
+                    thumbnailBuffer,
+                    'motion-thumbnails',
+                    'image',
+                    thumbnailPublicId
+                );
+                
+                video.cloudinaryThumbnailUrl = thumbnailUploadResult.secure_url;
+                video.cloudinaryThumbnailId = thumbnailUploadResult.public_id;
             }
         }
         if (thumbnailContentType !== undefined) {
@@ -1104,7 +1139,7 @@ const updateVideo = async (req, res) => {
     }
 };
 
-// Delete video (removes from MongoDB and GridFS)
+// Delete video (removes from MongoDB and Cloudinary)
 const deleteVideo = async (req, res) => {
     try {
         if (mongoose.connection.readyState !== 1) {
@@ -1125,35 +1160,38 @@ const deleteVideo = async (req, res) => {
             return res.status(404).json({ message: 'Video not found' });
         }
 
-        const db = mongoose.connection.db;
-        
-        // Delete video from GridFS
-        if (video.gridFSVideoId) {
-            const videoBucket = new GridFSBucket(db, { bucketName: 'videos' });
+        // Delete video from Cloudinary
+        if (video.cloudinaryVideoId) {
             try {
-                await videoBucket.delete(video.gridFSVideoId);
-                console.log('Deleted video from GridFS:', video.gridFSVideoId);
+                await cloudinary.uploader.destroy(video.cloudinaryVideoId, {
+                    resource_type: 'video'
+                });
+                console.log('Deleted video from Cloudinary:', video.cloudinaryVideoId);
             } catch (error) {
-                console.error('Error deleting video from GridFS:', error);
+                console.error('Error deleting video from Cloudinary:', error);
             }
         }
 
-        // Delete thumbnail from GridFS
-        if (video.gridFSThumbnailId) {
-            const thumbnailBucket = new GridFSBucket(db, { bucketName: 'thumbnails' });
+        // Delete thumbnail from Cloudinary
+        if (video.cloudinaryThumbnailId) {
             try {
-                await thumbnailBucket.delete(video.gridFSThumbnailId);
-                console.log('Deleted thumbnail from GridFS:', video.gridFSThumbnailId);
+                await cloudinary.uploader.destroy(video.cloudinaryThumbnailId, {
+                    resource_type: 'image'
+                });
+                console.log('Deleted thumbnail from Cloudinary:', video.cloudinaryThumbnailId);
             } catch (error) {
-                console.error('Error deleting thumbnail from GridFS:', error);
+                console.error('Error deleting thumbnail from Cloudinary:', error);
             }
         }
+
+        // Note: Legacy GridFS files are not deleted automatically
+        // They can be cleaned up manually if needed
 
         // Delete video document from database
         await Video.findByIdAndDelete(videoId);
 
         res.status(200).json({
-            message: 'Video deleted successfully from MongoDB and GridFS'
+            message: 'Video deleted successfully from MongoDB and Cloudinary'
         });
     } catch (error) {
         console.error('Error deleting video:', error);

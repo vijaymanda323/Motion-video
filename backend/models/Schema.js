@@ -131,7 +131,7 @@ const userSchema = new mongoose.Schema({
     }
 })
 
-// Video Schema for storing MP4 videos using GridFS
+// Video Schema for storing videos using Cloudinary
 const videoSchema = new mongoose.Schema({
     title: {
         type: String,
@@ -147,10 +147,19 @@ const videoSchema = new mongoose.Schema({
         type: String,
         required: true
     },
-    // GridFS file ID for the video file
+    // Cloudinary video URL and public ID
+    cloudinaryVideoUrl: {
+        type: String,
+        required: false
+    },
+    cloudinaryVideoId: {
+        type: String,
+        required: false
+    },
+    // Legacy GridFS fields (optional for backward compatibility)
     gridFSVideoId: {
         type: mongoose.Schema.Types.ObjectId,
-        required: true
+        required: false
     },
     contentType: {
         type: String,
@@ -165,7 +174,16 @@ const videoSchema = new mongoose.Schema({
         type: Number, // Duration in seconds
         required: false
     },
-    // GridFS file ID for thumbnail (optional)
+    // Cloudinary thumbnail URL and public ID
+    cloudinaryThumbnailUrl: {
+        type: String,
+        required: false
+    },
+    cloudinaryThumbnailId: {
+        type: String,
+        required: false
+    },
+    // Legacy GridFS thumbnail fields (optional for backward compatibility)
     gridFSThumbnailId: {
         type: mongoose.Schema.Types.ObjectId,
         required: false
