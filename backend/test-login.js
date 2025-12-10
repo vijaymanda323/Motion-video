@@ -1,7 +1,7 @@
 // Quick test script to verify login works
 const mongoose = require('mongoose');
 const User = require('./models/Schema');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 
 const MONGODB_URI = 'mongodb+srv://vijaymanda323_db_user:Vijay%403369@cluster0.xhsvyzy.mongodb.net/?appName=Cluster0';
 
