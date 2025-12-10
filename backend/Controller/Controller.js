@@ -524,7 +524,7 @@ const uploadVideoFile = async (req, res) => {
             userEmail: normalizedEmail,
             category: category || 'other',
             tags: parsedTags,
-            isPublic: isPublic === 'true' || isPublic === true,
+            isPublic: true, // Always make videos public so all users can see them
             status: 'ready'
         });
 
@@ -688,7 +688,7 @@ const uploadVideo = async (req, res) => {
             userEmail: normalizedEmail,
             category: category || 'other',
             tags: tags || [],
-            isPublic: isPublic || false,
+            isPublic: true, // Always make videos public so all users can see them
             status: 'ready'
         });
 
@@ -711,6 +711,89 @@ const uploadVideo = async (req, res) => {
         console.error('Error uploading video:', error);
         res.status(500).json({ 
             message: 'Error uploading video', 
+            error: error.message 
+        });
+    }
+};
+
+// Get all public videos (shared across all users)
+const getAllVideos = async (req, res) => {
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ 
+                message: 'Database connection not available.',
+                error: 'MongoDB not connected'
+            });
+        }
+
+        // Get all public videos, sorted by upload date
+        const videos = await Video.find({ isPublic: true, status: 'ready' })
+            .sort({ uploadedAt: -1 })
+            .select('-__v')
+            .lean();
+
+        res.status(200).json({
+            message: 'Videos retrieved successfully',
+            count: videos.length,
+            videos: videos
+        });
+    } catch (error) {
+        console.error('Error getting all videos:', error);
+        res.status(500).json({ 
+            message: 'Error getting videos', 
+            error: error.message 
+        });
+    }
+};
+
+// Get videos by routine name (for Quick Relief routines)
+const getVideosByRoutine = async (req, res) => {
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ 
+                message: 'Database connection not available.',
+                error: 'MongoDB not connected'
+            });
+        }
+
+        const { routineName } = req.params;
+        
+        if (!routineName) {
+            return res.status(400).json({ message: 'Routine name is required' });
+        }
+
+        // Search for videos by routine name in title or tags
+        // Convert routine name to searchable format (e.g., "Cat Cow" -> "cat-cow" or "cat cow")
+        const searchPattern = routineName.toLowerCase().replace(/\s+/g, '-');
+        const searchPattern2 = routineName.toLowerCase();
+
+        // Find videos where:
+        // 1. Title contains the routine name
+        // 2. Tags contain the routine name (in various formats)
+        // 3. Is public and ready
+        const videos = await Video.find({
+            isPublic: true,
+            status: 'ready',
+            $or: [
+                { title: { $regex: routineName, $options: 'i' } },
+                { tags: { $in: [searchPattern, searchPattern2, routineName] } },
+                { tags: { $regex: routineName, $options: 'i' } }
+            ]
+        })
+            .sort({ uploadedAt: -1 })
+            .select('-__v')
+            .lean();
+
+        res.status(200).json({
+            message: 'Videos retrieved successfully',
+            routineName: routineName,
+            count: videos.length,
+            videos: videos
+        });
+    } catch (error) {
+        console.error('Error getting videos by routine:', error);
+        res.status(500).json({ 
+            message: 'Error getting videos', 
             error: error.message 
         });
     }
@@ -1089,6 +1172,8 @@ module.exports = {
     uploadVideo,
     uploadVideoFile,
     upload, // Export multer middleware
+    getAllVideos,
+    getVideosByRoutine,
     getUserVideos,
     getVideoById,
     streamVideo,

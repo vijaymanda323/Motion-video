@@ -8,6 +8,8 @@ const {
     uploadVideo,
     uploadVideoFile,
     upload,
+    getAllVideos,
+    getVideosByRoutine,
     getUserVideos,
     getVideoById,
     streamVideo,
@@ -30,6 +32,10 @@ router.post('/videos/upload-file', upload.fields([
 ]), uploadVideoFile);
 // Upload video using base64 (original endpoint)
 router.post('/videos/upload', uploadVideo);
+// Get all public videos (shared across all users)
+router.get('/videos', getAllVideos);
+// Get videos by routine name (for Quick Relief)
+router.get('/videos/routine/:routineName', getVideosByRoutine);
 router.get('/videos/user/:email', getUserVideos);
 router.get('/videos/:videoId', getVideoById); // Get video metadata (use ?includeData=true for video data)
 router.get('/videos/:videoId/stream', streamVideo); // Stream video file for playback

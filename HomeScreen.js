@@ -164,8 +164,8 @@ export default function HomeScreen({ navigation }) {
           </View>
         </TouchableOpacity>
 
-        {/* Quick Relief - MADE CLICKABLE AND ADDED NAVIGATION */}
-        <TouchableOpacity onPress={() => navigation.navigate("QuickRelief")}>
+        {/* Quick Relief - MADE CLICKABLE AND ADDED NAVIGATION */}
+        <TouchableOpacity onPress={() => navigation.navigate("QuickRelief", { userEmail: userEmail })}>
           <View style={styles.card}>
             <View style={styles.cardHeaderRow}>
               <Ionicons name="list-outline" size={22} color="#777" />
